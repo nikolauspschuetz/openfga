@@ -171,3 +171,11 @@ func TestPlannerIntegrationMySQL_Conditioned(t *testing.T) {
 func TestPlannerIntegrationMySQL_StaleConditionOnConditionFreeRelation(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, staleConditionCases(t))
 }
+
+// TestPlannerIntegrationMySQL_Cycle drives models with relationship cycles end to end against MySQL:
+// the cycle-materializing tuples are seeded into the store, then planning must decline with
+// ErrUnsupportedWeight because the recursive (infinite-weight) path is not yet supported.
+func TestPlannerIntegrationMySQL_Cycle(t *testing.T) {
+	e := setupMysqlEnv(t)
+	runCycleCases(t, e.ds, e.builder, cycleCases())
+}

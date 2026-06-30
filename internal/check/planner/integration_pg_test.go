@@ -170,3 +170,11 @@ func TestPlannerIntegrationPostgres_Conditioned(t *testing.T) {
 func TestPlannerIntegrationPostgres_StaleConditionOnConditionFreeRelation(t *testing.T) {
 	setupPgEnv(t).runCases(t, staleConditionCases(t))
 }
+
+// TestPlannerIntegrationPostgres_Cycle drives models with relationship cycles end to end against
+// Postgres: the cycle-materializing tuples are seeded into the store, then planning must decline with
+// ErrUnsupportedWeight because the recursive (infinite-weight) path is not yet supported.
+func TestPlannerIntegrationPostgres_Cycle(t *testing.T) {
+	e := setupPgEnv(t)
+	runCycleCases(t, e.ds, e.builder, cycleCases())
+}

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/oklog/ulid/v2"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -22,6 +24,8 @@ import (
 
 	"github.com/openfga/openfga/internal/condition"
 	"github.com/openfga/openfga/internal/condition/eval"
+	"github.com/openfga/openfga/pkg/storage"
+	"github.com/openfga/openfga/pkg/storage/adapter"
 	"github.com/openfga/openfga/pkg/testutils"
 	"github.com/openfga/openfga/pkg/tuple"
 	"github.com/openfga/openfga/pkg/typesystem"
@@ -1519,5 +1523,146 @@ func mergedExclusionCases(t *testing.T) []plannerCase {
 
 		// negative holds but positive does not → still deny (nothing to negate from).
 		mk("negative_only_denies", false, blocked, old),
+	}
+}
+
+// cycleCase is one end-to-end scenario whose model contains a relationship cycle. The cycle makes
+// the resolution path recursive (infinite weight), which this iteration of the planner does not yet
+// support, so planning must decline with ErrUnsupportedWeight rather than loop, panic, or emit SQL.
+// The tuples are seeded into a real datastore first so the case proves the planner declines on the
+// model's shape — not merely because no data exercises the cycle — and that the cycle-materializing
+// rows in the store never trip up planning.
+type cycleCase struct {
+	name       string
+	model      string
+	objectType string
+	relation   string
+	subject    string
+	tuples     []*openfgav1.TupleKey
+}
+
+// cycleModel is the canonical mutually-recursive fixture: org#member and team#member each admit the
+// other as a userset, so the two relations form a membership cycle (org → team → org → …). The
+// document viewer reaches that cycle through a tuple-to-userset hop (member from parent over [org, team]).
+// Resolving viewer therefore has no finite weight to user, the signature of a recursive path.
+const cycleModel = `
+	model
+		schema 1.1
+	type user
+	type org
+		relations
+			define member: [user, team#member]
+	type team
+		relations
+			define member: [user, org#member]
+	type document
+		relations
+			define parent: [org, team]
+			define viewer: member from parent`
+
+// cycleCases drives models with relationship cycles through the planner with cycle-exercising tuples
+// seeded in the store. Each case must decline with ErrUnsupportedWeight.
+func cycleCases() []cycleCase {
+	return []cycleCase{
+		{
+			// document:1 parent org:o1; org:o1 members include team:t1#member, whose members include
+			// org:o1#member — a fully materialized org↔team membership cycle, with alice reachable
+			// one hop into it. The planner must still decline on the recursive model shape.
+			name:       "ttu_into_mutual_userset_cycle",
+			model:      cycleModel,
+			objectType: "document",
+			relation:   "viewer",
+			subject:    "user:alice",
+			tuples: []*openfgav1.TupleKey{
+				tuple.NewTupleKey("document:"+objectID, "parent", "org:o1"),
+				tuple.NewTupleKey("org:o1", "member", "team:t1#member"),
+				tuple.NewTupleKey("team:t1", "member", "org:o1#member"),
+				tuple.NewTupleKey("team:t1", "member", "user:alice"),
+			},
+		},
+		{
+			// The same model reached through the team parent, with the cycle closed the other way
+			// (team:t1 admits org:o1#member, org:o1 admits team:t1#member). alice is never granted,
+			// but the recursive shape — not the data — is what makes the planner decline.
+			name:       "ttu_into_cycle_no_grant",
+			model:      cycleModel,
+			objectType: "document",
+			relation:   "viewer",
+			subject:    "user:alice",
+			tuples: []*openfgav1.TupleKey{
+				tuple.NewTupleKey("document:"+objectID, "parent", "team:t1"),
+				tuple.NewTupleKey("team:t1", "member", "org:o1#member"),
+				tuple.NewTupleKey("org:o1", "member", "team:t1#member"),
+			},
+		},
+		{
+			// A self-recursive userset: group#member admits group#member directly, so member resolves
+			// to itself. group:g1 contains group:g2#member, which contains group:g1#member — a direct
+			// two-node membership cycle in the store. Checking group#member must decline.
+			name: "self_recursive_userset",
+			model: `
+				model
+					schema 1.1
+				type user
+				type group
+					relations
+						define member: [user, group#member]`,
+			objectType: "group",
+			relation:   "member",
+			subject:    "user:alice",
+			tuples: []*openfgav1.TupleKey{
+				tuple.NewTupleKey("group:g1", "member", "group:g2#member"),
+				tuple.NewTupleKey("group:g2", "member", "group:g1#member"),
+				tuple.NewTupleKey("group:g2", "member", "user:alice"),
+			},
+		},
+		{
+			// A tuple-to-userset cycle: viewer reaches itself through parent (document → document),
+			// so viewer from parent recurses through the document type. document:1 parent document:2
+			// parent document:1 closes the cycle in the store. Checking viewer must decline.
+			name: "ttu_self_cycle",
+			model: `
+				model
+					schema 1.1
+				type user
+				type document
+					relations
+						define parent: [document]
+						define viewer: [user] or viewer from parent`,
+			objectType: "document",
+			relation:   "viewer",
+			subject:    "user:alice",
+			tuples: []*openfgav1.TupleKey{
+				tuple.NewTupleKey("document:"+objectID, "parent", "document:2"),
+				tuple.NewTupleKey("document:2", "parent", "document:"+objectID),
+				tuple.NewTupleKey("document:2", "viewer", "user:alice"),
+			},
+		},
+	}
+}
+
+// runCycleCases seeds each cycle case's tuples into the given datastore (proving the planner declines
+// on the recursive model shape, not for lack of data) and asserts that planning returns
+// ErrUnsupportedWeight. It is engine-agnostic: the writer and builder come from the caller's env, so
+// Postgres, MySQL, and SQLite all exercise the identical scenarios.
+func runCycleCases(t *testing.T, ds storage.RelationshipTupleWriter, builder adapter.Builder, cases []cycleCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := ulid.Make().String()
+
+			ts, err := typesystem.New(testutils.MustTransformDSLToProtoWithID(tc.model))
+			require.NoError(t, err)
+			g := ts.GetWeightedGraph()
+			require.NotNil(t, g)
+
+			if len(tc.tuples) > 0 {
+				require.NoError(t, ds.Write(ctx, store, nil, tc.tuples))
+			}
+
+			_, err = New(builder).Plan(g, store, tc.objectType, objectID, tc.relation, tc.subject)
+			require.ErrorIs(t, err, ErrUnsupportedWeight)
+		})
 	}
 }

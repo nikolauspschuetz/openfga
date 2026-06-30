@@ -183,3 +183,11 @@ func TestPlannerIntegrationSQLite_Conditioned(t *testing.T) {
 func TestPlannerIntegrationSQLite_StaleConditionOnConditionFreeRelation(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, staleConditionCases(t))
 }
+
+// TestPlannerIntegrationSQLite_Cycle drives models with relationship cycles end to end against SQLite:
+// the cycle-materializing tuples are seeded into the store, then planning must decline with
+// ErrUnsupportedWeight because the recursive (infinite-weight) path is not yet supported.
+func TestPlannerIntegrationSQLite_Cycle(t *testing.T) {
+	e := setupSqliteEnv(t)
+	runCycleCases(t, e.ds, e.builder, cycleCases())
+}
