@@ -38,6 +38,46 @@ func NewDefault(model *modelgraph.AuthorizationModelGraph, resolver CheckResolve
 	}
 }
 
+var _ Strategy = &DefaultStrategy{}
+
+func (s *DefaultStrategy) Resolve(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, iter storage.TupleKeyIterator, visited *sync.Map) (*Response, error) {
+	var weight int
+	var ok bool
+
+	if weight, ok = edge.GetWeight(req.GetUserType()); !ok {
+		return &Response{}, nil
+	}
+
+	if weight == 1 {
+		// computed edges are solved by the relation node caller
+		switch edge.GetEdgeType() {
+		case authzGraph.DirectEdge:
+			switch edge.GetTo().GetNodeType() {
+			case authzGraph.SpecificType:
+				// terminal types are never part of a cycle
+				return s.resolver.SpecificType(ctx, req, edge)
+			case authzGraph.SpecificTypeWildcard:
+				// terminal types are never part of a cycle
+				return s.resolver.SpecificTypeWildcard(ctx, req, edge)
+			case authzGraph.SpecificTypeAndRelation:
+				// check for recursiveRelation
+				return s.resolver.SpecificTypeAndRelation(ctx, req, edge, visited)
+			default:
+				return nil, ErrPanicRequest
+			}
+		case authzGraph.DirectLogicalEdge, authzGraph.TTULogicalEdge, authzGraph.ComputedEdge:
+			return s.resolver.ResolveUnion(ctx, req, edge.GetTo(), visited)
+		case authzGraph.TTUEdge:
+			return s.resolver.TTU(ctx, req, edge, visited)
+		case authzGraph.RewriteEdge:
+			return s.resolver.ResolveRewrite(ctx, req, edge.GetTo(), visited)
+		default:
+			return nil, ErrPanicRequest
+		}
+	}
+	return &Response{}, nil
+}
+
 // defaultUserset will check userset path.
 // This is the slow path as it requires dispatch on all its children.
 func (s *DefaultStrategy) Userset(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, iter storage.TupleKeyIterator, visited *sync.Map) (*Response, error) {

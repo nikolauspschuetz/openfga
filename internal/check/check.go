@@ -83,6 +83,7 @@ func New(cfg Config) *Resolver {
 	if r.strategies == nil {
 		r.strategies = map[string]Strategy{
 			DefaultStrategyName:   NewDefault(cfg.Model, r, cfg.ConcurrencyLimit),
+			SqlStrategyName:       NewSql(cfg.Model, cfg.Datastore),
 			WeightTwoStrategyName: NewWeight2(cfg.Model, cfg.Datastore),
 			RecursiveStrategyName: NewRecursive(cfg.Model, cfg.Datastore, cfg.ConcurrencyLimit),
 		}
@@ -140,7 +141,13 @@ func (r *Resolver) ResolveCheck(ctx context.Context, req *Request) (*Response, e
 		return &Response{Allowed: false}, nil
 	}
 
-	res, err := r.ResolveUnion(ctx, req, node, nil)
+	var edges []*authzGraph.WeightedAuthorizationModelEdge
+
+	if edges, ok = r.model.GetEdgesFromNode(node); !ok || len(edges) == 0 {
+		return &Response{}, nil
+	}
+
+	res, err := r.ResolveEdge(ctx, req, edges[0], nil)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -782,31 +789,30 @@ func (r *Resolver) ResolveEdge(ctx context.Context, req *Request, edge *authzGra
 	if edge.IsPartOfTupleCycle() || edge.GetRecursiveRelation() != "" {
 		visitedObjects = visited
 	}
-	// computed edges are solved by the relation node caller
-	switch edge.GetEdgeType() {
-	case authzGraph.DirectEdge:
-		switch edge.GetTo().GetNodeType() {
-		case authzGraph.SpecificType:
-			// terminal types are never part of a cycle
-			return r.specificType(ctx, req, edge)
-		case authzGraph.SpecificTypeWildcard:
-			// terminal types are never part of a cycle
-			return r.specificTypeWildcard(ctx, req, edge)
-		case authzGraph.SpecificTypeAndRelation:
-			// check for recursiveRelation
-			return r.specificTypeAndRelation(ctx, req, edge, visitedObjects)
-		default:
-			return nil, ErrPanicRequest
-		}
-	case authzGraph.DirectLogicalEdge, authzGraph.TTULogicalEdge, authzGraph.ComputedEdge:
-		return r.ResolveUnion(ctx, req, edge.GetTo(), visitedObjects)
-	case authzGraph.TTUEdge:
-		return r.ttu(ctx, req, edge, visitedObjects)
-	case authzGraph.RewriteEdge:
-		return r.ResolveRewrite(ctx, req, edge.GetTo(), visitedObjects)
-	default:
-		return nil, ErrPanicRequest
+
+	weight, ok := edge.GetWeight(req.GetUserType())
+	if !ok {
+		return &Response{}, ErrPanicRequest
 	}
+
+	builder := r.datastore.Builder(req.Consistency)
+
+	if builder == nil || weight != 1 {
+		return r.strategies[DefaultStrategyName].Resolve(ctx, req, edge, nil, visitedObjects)
+	}
+
+	candidates := map[string]*planner.PlanConfig{
+		DefaultStrategyName: DefaultPlan,
+		SqlStrategyName:     SqlPlan,
+	}
+
+	planKey := createEdgePlanKey(req, edge)
+	keyPlan := r.planner.GetPlanSelector(planKey)
+	strategy := keyPlan.Select(candidates)
+
+	return r.executeStrategy(ctx, keyPlan, strategy, func() (*Response, error) {
+		return r.strategies[strategy.Name].Resolve(ctx, req, edge, nil, visitedObjects)
+	})
 }
 
 func (r *Resolver) ResolveRewrite(ctx context.Context, req *Request, node *authzGraph.WeightedAuthorizationModelNode, visited *sync.Map) (*Response, error) {
@@ -836,7 +842,7 @@ func (r *Resolver) ResolveRewrite(ctx context.Context, req *Request, node *authz
 	}
 }
 
-func (r *Resolver) specificType(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
+func (r *Resolver) SpecificType(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
 	ctx, span := tracer.Start(ctx, "specificType",
 		trace.WithAttributes(
 			attribute.String("tuple_key", req.GetTupleString()),
@@ -884,7 +890,7 @@ func (r *Resolver) specificType(ctx context.Context, req *Request, edge *authzGr
 	return &Response{Allowed: allowed}, nil
 }
 
-func (r *Resolver) specificTypeWildcard(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
+func (r *Resolver) SpecificTypeWildcard(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge) (*Response, error) {
 	ctx, span := tracer.Start(ctx, "specificTypeWildcard",
 		trace.WithAttributes(
 			attribute.String("tuple_key", req.GetTupleString()),
@@ -961,7 +967,7 @@ func (r *Resolver) specificTypeAndRelation(ctx context.Context, req *Request, ed
 	if edge.GetTo().GetUniqueLabel() == req.GetUserType() {
 		// we break here if there is an error, or the response is allowed, or if the edge is not recursive and it is not part of a tuple cycle
 		// in case it is recursive or it is part of the tuple cycle it needs to continue expanding the graph
-		res, err := r.specificType(ctx, req, edge)
+		res, err := r.SpecificType(ctx, req, edge)
 		if err != nil || res.GetAllowed() || (edge.GetRecursiveRelation() == "" && !edge.IsPartOfTupleCycle()) {
 			return res, err
 		}
@@ -1028,7 +1034,7 @@ func (r *Resolver) specificTypeAndRelation(ctx context.Context, req *Request, ed
 	})
 }
 
-func (r *Resolver) ttu(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
+func (r *Resolver) TTU(ctx context.Context, req *Request, edge *authzGraph.WeightedAuthorizationModelEdge, visited *sync.Map) (*Response, error) {
 	_, tuplesetRelation := tuple.SplitObjectRelation(edge.GetTuplesetRelation())
 	subjectType, computedRelation := tuple.SplitObjectRelation(edge.GetTo().GetUniqueLabel())
 
