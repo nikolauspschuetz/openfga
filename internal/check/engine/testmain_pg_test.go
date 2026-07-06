@@ -1,6 +1,6 @@
 //go:build docker
 
-package planner
+package engine
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 	storagefixtures "github.com/openfga/openfga/pkg/testfixtures/storage"
 )
 
-// TestMain tears down the shared PostgreSQL test container after the planner integration
+// TestMain tears down the shared PostgreSQL test container after the engine integration
 // tests finish. It mirrors pkg/storage/postgres/testmain_test.go; the container itself is
 // bootstrapped lazily by storagefixtures.RunDatastoreTestContainer.
 func TestMain(m *testing.M) {

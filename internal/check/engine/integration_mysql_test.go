@@ -1,7 +1,7 @@
 //go:build docker
 
-// These integration tests are the MySQL analogue of integration_pg_test.go: they drive the planner
-// end to end against a real MySQL database in a test container, proving the SQL the planner emits
+// These integration tests are the MySQL analogue of integration_pg_test.go: they drive the engine
+// end to end against a real MySQL database in a test container, proving the SQL the engine emits
 // through the production MySQL adapter (pkg/storage/adapter/mysql) returns correct authorization
 // decisions when MySQL actually runs it.
 //
@@ -9,9 +9,9 @@
 // (no build tag); this file adds only the MySQL-backed env and the tests that walk those shared
 // cases, so Postgres, MySQL, and SQLite exercise the same scenarios and must agree.
 //
-// Gated behind the `docker` build tag alongside the rest of the planner integration suite; run with
-// `go test -tags=docker ./internal/check/planner/...`.
-package planner
+// Gated behind the `docker` build tag alongside the rest of the engine integration suite; run with
+// `go test -tags=docker ./internal/check/engine/...`.
+package engine
 
 import (
 	"context"
@@ -31,7 +31,7 @@ import (
 )
 
 // mysqlEnv is the shared MySQL backing for the suite: a datastore used to seed tuples and the
-// mysql adapter the planner emits queries against. Both point at the same container, which
+// mysql adapter the engine emits queries against. Both point at the same container, which
 // storagefixtures bootstraps once and tears down in TestMain.
 type mysqlEnv struct {
 	ds      *mysqlds.Datastore
@@ -61,9 +61,9 @@ func setupMysqlEnv(t *testing.T) *mysqlEnv {
 }
 
 // run plans and executes the case against MySQL under a fresh store id (so cases sharing the
-// container's database never collide) and returns the planner's decision. It mirrors pgEnv.run,
+// container's database never collide) and returns the engine's decision. It mirrors pgEnv.run,
 // differing only in the backing datastore and adapter.
-func (e *mysqlEnv) run(t *testing.T, tc plannerCase) bool {
+func (e *mysqlEnv) run(t *testing.T, tc engineCase) bool {
 	t.Helper()
 	ctx := context.Background()
 	store := ulid.Make().String()
@@ -87,7 +87,7 @@ func (e *mysqlEnv) run(t *testing.T, tc plannerCase) bool {
 }
 
 // runCases walks a shared case table against the MySQL env.
-func (e *mysqlEnv) runCases(t *testing.T, cases []plannerCase) {
+func (e *mysqlEnv) runCases(t *testing.T, cases []engineCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,86 +96,86 @@ func (e *mysqlEnv) runCases(t *testing.T, cases []plannerCase) {
 	}
 }
 
-// TestPlannerIntegrationMySQL_ConditionFree covers the HAVING path, where MySQL folds the whole set
+// TestEngineIntegrationMySQL_ConditionFree covers the HAVING path, where MySQL folds the whole set
 // algebra and a returned row means granted.
-func TestPlannerIntegrationMySQL_ConditionFree(t *testing.T) {
+func TestEngineIntegrationMySQL_ConditionFree(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, conditionFreeCases(t))
 }
 
-// TestPlannerIntegrationMySQL_NestedConditionFree drives the complex nested tree end to end, the
+// TestEngineIntegrationMySQL_NestedConditionFree drives the complex nested tree end to end, the
 // integration analogue of TestPlanSQL_NestedSetOperationsHaving.
-func TestPlannerIntegrationMySQL_NestedConditionFree(t *testing.T) {
+func TestEngineIntegrationMySQL_NestedConditionFree(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, nestedConditionFreeCases(t))
 }
 
-// TestPlannerIntegrationMySQL_NestedConditioned drives the conditioned nested tree through the
+// TestEngineIntegrationMySQL_NestedConditioned drives the conditioned nested tree through the
 // gather path, the integration analogue of TestPlanSQL_NestedSetOperationsWithConditionsGather.
-func TestPlannerIntegrationMySQL_NestedConditioned(t *testing.T) {
+func TestEngineIntegrationMySQL_NestedConditioned(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, nestedConditionedCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwo drives weight-2 resolution paths — a single
+// TestEngineIntegrationMySQL_WeightTwo drives weight-2 resolution paths — a single
 // tuple-to-userset or userset hop — end to end against MySQL.
-func TestPlannerIntegrationMySQL_WeightTwo(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwo(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, weightTwoCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwoComplexBothLevels drives set operations across three
+// TestEngineIntegrationMySQL_WeightTwoComplexBothLevels drives set operations across three
 // weight-2 hops with a hop-2 intersection inside from_folder, run end to end against MySQL.
-func TestPlannerIntegrationMySQL_WeightTwoComplexBothLevels(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwoComplexBothLevels(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, weightTwoComplexBothLevelsCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwoCondLeft drives the LEFT-side conditioned model against
+// TestEngineIntegrationMySQL_WeightTwoCondLeft drives the LEFT-side conditioned model against
 // MySQL: each hop-1 edge carries a condition, the hop-2 relations do not.
-func TestPlannerIntegrationMySQL_WeightTwoCondLeft(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwoCondLeft(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, weightTwoCondLeftCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwoCondRight drives the RIGHT-side conditioned model against
+// TestEngineIntegrationMySQL_WeightTwoCondRight drives the RIGHT-side conditioned model against
 // MySQL: the hop-2 relations carry conditions, the hop-1 edges do not.
-func TestPlannerIntegrationMySQL_WeightTwoCondRight(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwoCondRight(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, weightTwoCondRightCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwoCondBoth drives the BOTH-sides conditioned model against
+// TestEngineIntegrationMySQL_WeightTwoCondBoth drives the BOTH-sides conditioned model against
 // MySQL: every traversal carries a condition on its hop-1 edge and its hop-2 relation.
-func TestPlannerIntegrationMySQL_WeightTwoCondBoth(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwoCondBoth(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, weightTwoCondBothCases(t))
 }
 
-// TestPlannerIntegrationMySQL_WeightTwoComplexMixed drives the combined mixed fixture against MySQL:
+// TestEngineIntegrationMySQL_WeightTwoComplexMixed drives the combined mixed fixture against MySQL:
 // TTU and userset hops across union/intersection/exclusion with conditions on left, right, and both.
-func TestPlannerIntegrationMySQL_WeightTwoComplexMixed(t *testing.T) {
+func TestEngineIntegrationMySQL_WeightTwoComplexMixed(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, complexWeightTwoMixedCases(t))
 }
 
-// TestPlannerIntegrationMySQL_MergedExclusion drives the merged-region exclusion model end to end
+// TestEngineIntegrationMySQL_MergedExclusion drives the merged-region exclusion model end to end
 // against MySQL, proving the three compiled units fold to the correct decision across the model's
 // truth table.
-func TestPlannerIntegrationMySQL_MergedExclusion(t *testing.T) {
+func TestEngineIntegrationMySQL_MergedExclusion(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, mergedExclusionCases(t))
 }
 
-// TestPlannerIntegrationMySQL_Conditioned covers the gather path: the plan mentions an ABAC
-// condition, so MySQL only scans candidate tuples and the planner folds the set algebra in process
+// TestEngineIntegrationMySQL_Conditioned covers the gather path: the plan mentions an ABAC
+// condition, so MySQL only scans candidate tuples and the engine folds the set algebra in process
 // after evaluating CEL.
-func TestPlannerIntegrationMySQL_Conditioned(t *testing.T) {
+func TestEngineIntegrationMySQL_Conditioned(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, conditionedCases(t))
 }
 
-// TestPlannerIntegrationMySQL_StaleConditionOnConditionFreeRelation is the MySQL analogue of the
+// TestEngineIntegrationMySQL_StaleConditionOnConditionFreeRelation is the MySQL analogue of the
 // Postgres test of the same name: a stale conditioned tuple on a plain `[user]` relation must not
 // satisfy the condition-free (HAVING) plan, because the count atom matches only unconditioned
 // tuples.
-func TestPlannerIntegrationMySQL_StaleConditionOnConditionFreeRelation(t *testing.T) {
+func TestEngineIntegrationMySQL_StaleConditionOnConditionFreeRelation(t *testing.T) {
 	setupMysqlEnv(t).runCases(t, staleConditionCases(t))
 }
 
-// TestPlannerIntegrationMySQL_Cycle drives models with relationship cycles end to end against MySQL:
+// TestEngineIntegrationMySQL_Cycle drives models with relationship cycles end to end against MySQL:
 // the cycle-materializing tuples are seeded into the store, then planning must decline with
 // ErrUnsupportedWeight because the recursive (infinite-weight) path is not yet supported.
-func TestPlannerIntegrationMySQL_Cycle(t *testing.T) {
+func TestEngineIntegrationMySQL_Cycle(t *testing.T) {
 	e := setupMysqlEnv(t)
 	runCycleCases(t, e.ds, e.builder, cycleCases())
 }

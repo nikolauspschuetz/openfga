@@ -1,4 +1,4 @@
-package planner
+package engine
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 // defaultConcurrencyLimit bounds the number of extra goroutines a single plan execution may
 // spawn when no limit is configured. It mirrors pkg/server/config.DefaultResolveNodeBreadthLimit
 // (the breadth limit applied to the graph LocalChecker); it is duplicated here rather than
-// imported to keep internal/check/planner free of a dependency on pkg/server.
+// imported to keep internal/check/engine free of a dependency on pkg/server.
 const defaultConcurrencyLimit = 10
 
 // limiter bounds the number of additional goroutines a plan execution may spawn, while

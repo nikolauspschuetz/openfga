@@ -1,4 +1,4 @@
-package planner
+package engine
 
 import (
 	"context"
@@ -58,12 +58,12 @@ func (p *Plan) Execute(ctx context.Context, eval ConditionEvaluator, opts ...Exe
 		// The database decided the set algebra; a returned row means granted.
 		rows, err := p.unit.query.Execute(ctx)
 		if err != nil {
-			return false, fmt.Errorf("planner: executing check query: %w", err)
+			return false, fmt.Errorf("engine: executing check query: %w", err)
 		}
 		defer rows.Close()
 		granted := rows.Next()
 		if err := rows.Err(); err != nil {
-			return false, fmt.Errorf("planner: iterating check query: %w", err)
+			return false, fmt.Errorf("engine: iterating check query: %w", err)
 		}
 		return granted, nil
 
@@ -78,7 +78,7 @@ func (p *Plan) Execute(ctx context.Context, eval ConditionEvaluator, opts ...Exe
 		return p.executeMulti(lctx, eval, lim)
 
 	default:
-		return false, fmt.Errorf("planner: unknown unit kind %d", p.unit.kind)
+		return false, fmt.Errorf("engine: unknown unit kind %d", p.unit.kind)
 	}
 }
 
@@ -168,7 +168,7 @@ func leafAcceptsCondition(leaf *QueryNode, name string) bool {
 // condition shared across leaves or rows is evaluated once.
 func evalCondition(ctx context.Context, eval ConditionEvaluator, leaf *QueryNode, r gatherRow, cache map[keys.Key]bool) (bool, error) {
 	if eval == nil {
-		return false, fmt.Errorf("planner: tuple for %q carries condition %q but no evaluator was provided", leaf.Label, r.condName)
+		return false, fmt.Errorf("engine: tuple for %q carries condition %q but no evaluator was provided", leaf.Label, r.condName)
 	}
 	return evalNamedCondition(ctx, eval, r.condName, r.condCtx, cache)
 }
@@ -181,7 +181,7 @@ func evalNamedCondition(ctx context.Context, eval ConditionEvaluator, name strin
 		return true, nil
 	}
 	if eval == nil {
-		return false, fmt.Errorf("planner: tuple carries condition %q but no evaluator was provided", name)
+		return false, fmt.Errorf("engine: tuple carries condition %q but no evaluator was provided", name)
 	}
 	builder := keys.GetBuilder()
 	defer builder.Close()
@@ -193,7 +193,7 @@ func evalNamedCondition(ctx context.Context, eval ConditionEvaluator, name strin
 	}
 	ok, err := eval.Eval(ctx, name, condCtx)
 	if err != nil {
-		return false, fmt.Errorf("planner: evaluating condition %q: %w", name, err)
+		return false, fmt.Errorf("engine: evaluating condition %q: %w", name, err)
 	}
 	cache[key] = ok
 	return ok, nil
@@ -341,17 +341,17 @@ func (p *Plan) runLeaf(ctx context.Context, eval ConditionEvaluator, lq leafQuer
 		}
 		leaf, ok := lq.node.(*QueryNode)
 		if !ok {
-			return false, fmt.Errorf("planner: gather leaf is %T, want *QueryNode", lq.node)
+			return false, fmt.Errorf("engine: gather leaf is %T, want *QueryNode", lq.node)
 		}
 		return p.executeLeafGather(ctx, eval, leaf, lq.query)
 	case leafJoinGather:
 		join, ok := lq.node.(*JoinNode)
 		if !ok {
-			return false, fmt.Errorf("planner: join-gather leaf is %T, want *JoinNode", lq.node)
+			return false, fmt.Errorf("engine: join-gather leaf is %T, want *JoinNode", lq.node)
 		}
 		return executeJoinGather(ctx, eval, join, lq.query)
 	default:
-		return false, fmt.Errorf("planner: unknown leaf kind %d", lq.kind)
+		return false, fmt.Errorf("engine: unknown leaf kind %d", lq.kind)
 	}
 }
 
@@ -359,12 +359,12 @@ func (p *Plan) runLeaf(ctx context.Context, eval ConditionEvaluator, lq leafQuer
 func rowExists(ctx context.Context, query adapter.Query) (bool, error) {
 	rows, err := query.Execute(ctx)
 	if err != nil {
-		return false, fmt.Errorf("planner: executing leaf query: %w", err)
+		return false, fmt.Errorf("engine: executing leaf query: %w", err)
 	}
 	defer rows.Close()
 	granted := rows.Next()
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("planner: iterating leaf query: %w", err)
+		return false, fmt.Errorf("engine: iterating leaf query: %w", err)
 	}
 	return granted, nil
 }
@@ -406,7 +406,7 @@ func (p *Plan) executeRegionGather(ctx context.Context, eval ConditionEvaluator,
 func scanGather(ctx context.Context, query adapter.Query) ([]gatherRow, error) {
 	rows, err := query.Execute(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("planner: executing check query: %w", err)
+		return nil, fmt.Errorf("engine: executing check query: %w", err)
 	}
 	defer rows.Close()
 
@@ -415,7 +415,7 @@ func scanGather(ctx context.Context, query adapter.Query) ([]gatherRow, error) {
 		var relation, subjectID, name sql.NullString
 		var condCtx []byte
 		if err := rows.Scan(&relation, &subjectID, &name, &condCtx); err != nil {
-			return nil, fmt.Errorf("planner: scanning check query: %w", err)
+			return nil, fmt.Errorf("engine: scanning check query: %w", err)
 		}
 		gathered = append(gathered, gatherRow{
 			relation:  relation.String,
@@ -425,7 +425,7 @@ func scanGather(ctx context.Context, query adapter.Query) ([]gatherRow, error) {
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("planner: iterating check query: %w", err)
+		return nil, fmt.Errorf("engine: iterating check query: %w", err)
 	}
 	return gathered, nil
 }
@@ -439,7 +439,7 @@ func scanGather(ctx context.Context, query adapter.Query) ([]gatherRow, error) {
 func executeJoinGather(ctx context.Context, eval ConditionEvaluator, join *JoinNode, query adapter.Query) (bool, error) {
 	rows, err := query.Execute(ctx)
 	if err != nil {
-		return false, fmt.Errorf("planner: executing join query: %w", err)
+		return false, fmt.Errorf("engine: executing join query: %w", err)
 	}
 	defer rows.Close()
 
@@ -454,7 +454,7 @@ func executeJoinGather(ctx context.Context, eval ConditionEvaluator, join *JoinN
 		var intermediateID, hop1Cond, hop2Rel, subjectID, hop2Cond sql.NullString
 		var hop1CondCtx, hop2CondCtx []byte
 		if err := rows.Scan(&intermediateID, &hop1Cond, &hop1CondCtx, &hop2Rel, &subjectID, &hop2Cond, &hop2CondCtx); err != nil {
-			return false, fmt.Errorf("planner: scanning join query: %w", err)
+			return false, fmt.Errorf("engine: scanning join query: %w", err)
 		}
 		id := intermediateID.String
 		if _, seen := byObject[id]; !seen {
@@ -493,7 +493,7 @@ func executeJoinGather(ctx context.Context, eval ConditionEvaluator, join *JoinN
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("planner: iterating join query: %w", err)
+		return false, fmt.Errorf("engine: iterating join query: %w", err)
 	}
 
 	leaves := collectLeaves(join.Hop2)

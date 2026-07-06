@@ -1,4 +1,4 @@
-package planner
+package engine
 
 import (
 	"fmt"
@@ -10,17 +10,17 @@ import (
 	"github.com/openfga/openfga/pkg/tuple"
 )
 
-// Planner builds a Plan for a Check by traversing a weighted authorization model graph
-// and emitting adapter queries. A Planner is stateless and safe to reuse.
-type Planner struct {
+// Engine builds a Plan for a Check by traversing a weighted authorization model graph
+// and emitting adapter queries. An Engine is stateless and safe to reuse.
+type Engine struct {
 	builder adapter.Builder
 }
 
-// New returns a Planner that builds its queries with the given adapter.Builder. Pass a
+// New returns an Engine that builds its queries with the given adapter.Builder. Pass a
 // render-only builder (no executor) to inspect or test the generated SQL, or an
 // engine-backed builder to produce executable queries.
-func New(builder adapter.Builder) *Planner {
-	return &Planner{builder: builder}
+func New(builder adapter.Builder) *Engine {
+	return &Engine{builder: builder}
 }
 
 // Plan traverses the weighted graph from the entry node objectType#relation toward the
@@ -30,17 +30,17 @@ func New(builder adapter.Builder) *Planner {
 // This iteration supports weight-1 resolution paths only. If the relation reaches the
 // subject type through any userset or tuple-to-userset hop (weight > 1) or recursion
 // (infinite weight), Plan returns ErrUnsupportedWeight.
-func (p *Planner) Plan(g *graph.WeightedAuthorizationModelGraph, store, objectType, objectID, relation, user string) (*Plan, error) {
+func (p *Engine) Plan(g *graph.WeightedAuthorizationModelGraph, store, objectType, objectID, relation, user string) (*Plan, error) {
 	subjectType, subjectID, subjectRelation := tuple.ToUserParts(user)
 
 	entryID := tuple.ToObjectRelationString(objectType, relation)
 	entry, ok := g.GetNodeByID(entryID)
 	if !ok {
-		return nil, fmt.Errorf("planner: no node for %q", entryID)
+		return nil, fmt.Errorf("engine: no node for %q", entryID)
 	}
 
 	w := &walker{
-		planner:         p,
+		engine:         p,
 		graph:           g,
 		store:           store,
 		objectType:      objectType,
@@ -100,7 +100,7 @@ func (p *Planner) Plan(g *graph.WeightedAuthorizationModelGraph, store, objectTy
 // tree folds its whole set algebra in the database via a HAVING clause; a tree that
 // mentions any ABAC condition gathers its candidate tuples in one scan for in-process CEL
 // evaluation and folding. An empty tree (unreachable subject type) needs no query.
-func (p *Planner) compile(bnd bound, root Node) unit {
+func (p *Engine) compile(bnd bound, root Node) unit {
 	if cn, ok := root.(*CombineNode); ok && len(cn.Children) == 0 {
 		return unit{kind: unitFalse}
 	}
@@ -125,7 +125,7 @@ func (p *Planner) compile(bnd bound, root Node) unit {
 // weight-1 region (folding its whole set algebra, via buildHavingQuery / buildGatherQuery), and
 // one self-join query per JoinNode. The executor folds the rewritten tree (multiRoot) over the
 // per-unit booleans, so the rewritten node objects are the fold keys.
-func (p *Planner) compileMulti(bnd bound, root Node) unit {
+func (p *Engine) compileMulti(bnd bound, root Node) unit {
 	rewritten := rewriteForMulti(root)
 
 	var leaves []leafQuery
@@ -163,7 +163,7 @@ func (p *Planner) compileMulti(bnd bound, root Node) unit {
 // the database when condition-free, or a gather scan over the region's leaves for in-process CEL
 // and folding when any leaf is conditioned. The region root is the fold key; for either gather
 // case its leaves are recorded so the executor can attribute rows and fold the region subtree.
-func (p *Planner) compileWeightOneUnit(bnd bound, n Node) leafQuery {
+func (p *Engine) compileWeightOneUnit(bnd bound, n Node) leafQuery {
 	if leaf, ok := n.(*QueryNode); ok {
 		// A lone leaf keeps the existing standalone query and resolution (leafBool, or the
 		// single-leaf leafGather path); no subtree fold is needed.
@@ -238,7 +238,7 @@ func containsJoinNode(n Node) bool {
 
 // walker carries the immutable Check context threaded through the recursive traversal.
 type walker struct {
-	planner         *Planner
+	engine         *Engine
 	graph           *graph.WeightedAuthorizationModelGraph
 	store           string
 	objectType      string
@@ -292,7 +292,7 @@ func (w *walker) walk(node *graph.WeightedAuthorizationModelNode, relation strin
 		return w.walkEdges(node, relation)
 
 	default:
-		return nil, fmt.Errorf("planner: unsupported node type %d for %q", node.GetNodeType(), node.GetUniqueLabel())
+		return nil, fmt.Errorf("engine: unsupported node type %d for %q", node.GetNodeType(), node.GetUniqueLabel())
 	}
 }
 
@@ -338,7 +338,7 @@ func (w *walker) walkExclusion(node *graph.WeightedAuthorizationModelNode, relat
 
 	edges, ok := w.graph.GetEdgesFromNode(node)
 	if !ok || len(edges) != 2 {
-		return nil, fmt.Errorf("planner: exclusion %q expected 2 operand edges, got %d", node.GetUniqueLabel(), len(edges))
+		return nil, fmt.Errorf("engine: exclusion %q expected 2 operand edges, got %d", node.GetUniqueLabel(), len(edges))
 	}
 
 	baseWeight, baseRelevant := w.edgeWeight(edges[0])
@@ -399,7 +399,7 @@ func (w *walker) walkEdges(node *graph.WeightedAuthorizationModelNode, relation 
 func (w *walker) relevantEdges(node *graph.WeightedAuthorizationModelNode) ([]*graph.WeightedAuthorizationModelEdge, error) {
 	edges, ok := w.graph.GetEdgesFromNode(node)
 	if !ok {
-		return nil, fmt.Errorf("planner: no edges from %q", node.GetUniqueLabel())
+		return nil, fmt.Errorf("engine: no edges from %q", node.GetUniqueLabel())
 	}
 	var relevant []*graph.WeightedAuthorizationModelEdge
 	for _, edge := range edges {
@@ -488,7 +488,7 @@ func (w *walker) walkEdge(edge *graph.WeightedAuthorizationModelEdge, relation s
 		return w.walk(edge.GetTo(), relation, edge.GetConditions())
 
 	default:
-		return nil, fmt.Errorf("planner: unsupported edge type %d", edge.GetEdgeType())
+		return nil, fmt.Errorf("engine: unsupported edge type %d", edge.GetEdgeType())
 	}
 }
 
@@ -559,14 +559,14 @@ func (w *walker) walkUsersetEdge(edge *graph.WeightedAuthorizationModelEdge, rel
 // hop2Subtree resolves the inner (hop-2) relation on the intermediate type to the weight-1
 // plan subtree that grants the bound subject. It reuses the main traversal on a sub-walker
 // bound to the intermediate type with an unbound object id, so the subtree mirrors what the
-// planner would build for that relation as a top-level Check — a QueryNode, or a CombineNode
+// engine would build for that relation as a top-level Check — a QueryNode, or a CombineNode
 // of QueryNodes for set operations. The sub-walk's own weight gates reject any further hop
 // (which would make the overall path weight 3+), so the result is necessarily weight-1; this
 // only additionally guards that no JoinNode slipped in, since a JoinNode cannot be folded
 // per intermediate object by the self-join's HAVING.
 func (w *walker) hop2Subtree(to *graph.WeightedAuthorizationModelNode, innerRelation, intermediateType string) (Node, error) {
 	sub := &walker{
-		planner:         w.planner,
+		engine:         w.engine,
 		graph:           w.graph,
 		store:           w.store,
 		objectType:      intermediateType,
@@ -634,6 +634,6 @@ func combineOpFor(label string) (CombineOp, error) {
 	case graph.ExclusionOperator:
 		return CombineExcept, nil
 	default:
-		return 0, fmt.Errorf("planner: unknown operator %q", label)
+		return 0, fmt.Errorf("engine: unknown operator %q", label)
 	}
 }

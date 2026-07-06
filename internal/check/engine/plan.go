@@ -1,4 +1,4 @@
-// Package planner translates an OpenFGA Check request into a single SQL query against
+// Package engine translates an OpenFGA Check request into a single SQL query against
 // the `tuple` table and resolves it in process.
 //
 // It traverses the weighted authorization model graph
@@ -26,7 +26,7 @@
 // of the tree, so a plan containing any weight-2 hop runs every leaf query in parallel and
 // folds their booleans in process. Paths above weight two, and recursion (infinite weight),
 // return ErrUnsupportedWeight.
-package planner
+package engine
 
 import (
 	"errors"
@@ -38,7 +38,7 @@ import (
 // to the terminal subject type exceeds two — a path needing more than one userset or
 // tuple-to-userset hop — or a recursive (infinite-weight) relation. This iteration supports
 // weight-1 and weight-2 paths; deeper and recursive handling lands in a future iteration.
-var ErrUnsupportedWeight = errors.New("planner: resolution path weight not yet supported")
+var ErrUnsupportedWeight = errors.New("engine: resolution path weight not yet supported")
 
 // CombineOp is the set operation a CombineNode applies over its children, mirroring the
 // model's union / intersection / exclusion rewrites.
@@ -67,7 +67,7 @@ type Node interface {
 // QueryNode is a leaf of the plan: a relation on the bound object that grants the bound
 // subject directly. It records the coordinates needed to filter the `tuple` table for
 // this region (the in-effect relation, the bound subject, and the accepted conditions),
-// rather than a prebuilt query — the planner compiles the whole tree into one query.
+// rather than a prebuilt query — the engine compiles the whole tree into one query.
 //
 // In this iteration every QueryNode has Weight == 1 (a same-type region). The field is
 // retained so future weight-2 userset / TTU hops slot in without reshaping the tree.
@@ -134,7 +134,7 @@ type JoinNode struct {
 	// IntermediateType is the object type the hop lands on (e.g. "folder" or "group").
 	IntermediateType string
 	// Hop2 is the weight-1 plan subtree, on the intermediate type, that grants the bound
-	// subject. It is the same shape the planner builds for a top-level weight-1 relation (a
+	// subject. It is the same shape the engine builds for a top-level weight-1 relation (a
 	// QueryNode, or a CombineNode of QueryNodes for set operations), and is folded per
 	// intermediate object: the hop is satisfied iff some intermediate object reached from
 	// the bound object via hop 1 satisfies it.

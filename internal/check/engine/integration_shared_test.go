@@ -1,5 +1,5 @@
-// This file holds the engine-agnostic scaffolding for the planner integration suites:
-// the plannerCase shape, the conditionEvaluator bridge to real CEL, the tuple helpers, the
+// This file holds the engine-agnostic scaffolding for the engine integration suites:
+// the engineCase shape, the conditionEvaluator bridge to real CEL, the tuple helpers, the
 // model fixtures, and the case tables. It carries no build tag, so it compiles into both the
 // Docker-gated suites (Postgres, MySQL — integration_pg_test.go / integration_mysql_test.go)
 // and the Docker-free SQLite suite (integration_sqlite_test.go).
@@ -8,7 +8,7 @@
 // adapter, plus a run method — and then walks these shared cases, so all three engines exercise
 // the exact same scenarios and must agree on every decision. The case tables are the single
 // source of truth; adding a case here extends every engine's coverage at once.
-package planner
+package engine
 
 import (
 	"context"
@@ -34,10 +34,10 @@ import (
 // objectID is the shared object every case checks against (document:1, folder hops, etc.).
 const objectID = "1"
 
-// plannerCase is one end-to-end scenario: a model, the tuples to seed, the Check to plan,
+// engineCase is one end-to-end scenario: a model, the tuples to seed, the Check to plan,
 // and the expected decision. The requestContext field supplies condition parameters for the
 // gather (ABAC) path; it is nil for condition-free cases.
-type plannerCase struct {
+type engineCase struct {
 	name           string
 	model          string
 	objectType     string
@@ -48,7 +48,7 @@ type plannerCase struct {
 	expected       bool
 }
 
-// conditionEvaluator bridges the planner's ConditionEvaluator to the real CEL evaluator. It
+// conditionEvaluator bridges the engine's ConditionEvaluator to the real CEL evaluator. It
 // reuses the conditions already compiled by the TypeSystem and merges the request context
 // (built once per case) with each tuple's stored context.
 type conditionEvaluator struct {
@@ -123,7 +123,7 @@ func condHop2(object, relation, condition string) *openfgav1.TupleKey {
 // conditionFreeCases covers the HAVING path, where the database folds the whole set algebra and
 // a returned row means granted. It walks direct, union, intersection, exclusion, wildcard, and
 // unreachable-subject shapes.
-func conditionFreeCases(t *testing.T) []plannerCase {
+func conditionFreeCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	const directModel = `
@@ -134,7 +134,7 @@ func conditionFreeCases(t *testing.T) []plannerCase {
 			relations
 				define viewer: [user]`
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			name:       "direct_grant",
 			model:      directModel,
@@ -283,7 +283,7 @@ func conditionFreeCases(t *testing.T) []plannerCase {
 
 // nestedModel is the complex condition-free rewrite tree mirrored from
 // TestPlanSQL_NestedSetOperationsHaving: five direct leaves combined through all three set
-// operators, which the planner flattens and folds into a single HAVING clause shaped
+// operators, which the engine flattens and folds into a single HAVING clause shaped
 //
 //	viewer = (((direct_a OR direct_b) AND (direct_c AND direct_d)) AND NOT direct_e)
 const nestedModel = `
@@ -305,9 +305,9 @@ const nestedModel = `
 
 // nestedConditionFreeCases seeds representative points in nestedModel's truth table, asserting
 // the decision the database folds out of the single HAVING clause.
-func nestedConditionFreeCases(t *testing.T) []plannerCase {
+func nestedConditionFreeCases(t *testing.T) []engineCase {
 	t.Helper()
-	return []plannerCase{
+	return []engineCase{
 		{
 			// editor via direct_a, approver fully satisfied, not blocked → granted.
 			name:       "grant_via_direct_a",
@@ -375,7 +375,7 @@ func nestedConditionFreeCases(t *testing.T) []plannerCase {
 
 // nestedCondModel is the same nested tree as nestedModel, but two leaves carry ABAC conditions
 // (direct_a / direct_d), mirroring TestPlanSQL_NestedSetOperationsWithConditionsGather. Because
-// conditions appear, the planner cannot fold in HAVING and instead gathers candidate tuples for
+// conditions appear, the engine cannot fold in HAVING and instead gathers candidate tuples for
 // in-process CEL — so these cases exercise the gather path through the full tree.
 const nestedCondModel = `
 	model
@@ -401,11 +401,11 @@ const nestedCondModel = `
 	}`
 
 // nestedConditionedCases drives the conditioned nested tree through the gather path: only the
-// candidate tuples are scanned and the planner folds the set algebra in process after evaluating
+// candidate tuples are scanned and the engine folds the set algebra in process after evaluating
 // CEL. Each condition's parameters are stored on the tuple, so no request context is supplied.
-func nestedConditionedCases(t *testing.T) []plannerCase {
+func nestedConditionedCases(t *testing.T) []engineCase {
 	t.Helper()
-	return []plannerCase{
+	return []engineCase{
 		{
 			// Both conditions pass and the structure is satisfied → granted.
 			name:       "grant_both_conditions_pass",
@@ -473,7 +473,7 @@ func nestedConditionedCases(t *testing.T) []plannerCase {
 // weightTwoCases drives weight-2 resolution paths — a single tuple-to-userset or userset hop —
 // each compiling to a self-join (or, when conditioned, a self-join gather). The cases prove the
 // emitted join SQL returns the decision the two-hop relationship dictates.
-func weightTwoCases(t *testing.T) []plannerCase {
+func weightTwoCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	const ttuModel = `
@@ -499,7 +499,7 @@ func weightTwoCases(t *testing.T) []plannerCase {
 			relations
 				define viewer: [group#member]`
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// document:1 parent folder:f1; alice is admin of folder:f1 → granted via TTU.
 			name:       "ttu_grant",
@@ -809,7 +809,7 @@ const complexWeightTwoModel = `
 // (from_folder AND from_org) BUT NOT from_blocked, where from_folder additionally requires admin
 // AND editor on the same folder — proving the per-object GROUP BY/HAVING fold and the in-process
 // outer fold agree with the relationship semantics.
-func weightTwoComplexBothLevelsCases(t *testing.T) []plannerCase {
+func weightTwoComplexBothLevelsCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// The parent/org/blocked links are fixed; what varies is which inner grants exist.
@@ -822,7 +822,7 @@ func weightTwoComplexBothLevelsCases(t *testing.T) []plannerCase {
 		return append(append([]*openfgav1.TupleKey{}, links...), extra...)
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// from_folder: f1 has admin AND editor → grant. from_org: o1 owner. not blocked.
 			name:       "all_satisfied_not_blocked_grants",
@@ -884,9 +884,9 @@ func weightTwoComplexBothLevelsCases(t *testing.T) []plannerCase {
 }
 
 // conditionedCases covers the gather path on weight-1 relations: the plan mentions an ABAC
-// condition, so only candidate tuples are scanned and the planner folds the set algebra in
+// condition, so only candidate tuples are scanned and the engine folds the set algebra in
 // process after evaluating CEL. The request context drives the condition result.
-func conditionedCases(t *testing.T) []plannerCase {
+func conditionedCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	const condModel = `
@@ -900,7 +900,7 @@ func conditionedCases(t *testing.T) []plannerCase {
 			x >= 0
 		}`
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			name:       "condition_passes_grants",
 			model:      condModel,
@@ -969,7 +969,7 @@ func conditionedCases(t *testing.T) []plannerCase {
 // that nonetheless exists for that relation (e.g. left stale after the condition was dropped from
 // the model) must NOT satisfy the Check — the HAVING count atom matches only unconditioned tuples,
 // so a row carrying a condition name contributes NULL to the count and is never counted.
-func staleConditionCases(t *testing.T) []plannerCase {
+func staleConditionCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	const conditionFreeModel = `
@@ -980,7 +980,7 @@ func staleConditionCases(t *testing.T) []plannerCase {
 			relations
 				define viewer: [user]`
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			name:       "stale_conditioned_tuple_denied",
 			model:      conditionFreeModel,
@@ -1144,7 +1144,7 @@ const complexWeightTwoMixedModel = `
 	}`
 
 // weightTwoCondLeftCases returns the shared case table for the LEFT-side conditioned model.
-func weightTwoCondLeftCases(t *testing.T) []plannerCase {
+func weightTwoCondLeftCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// Both hop-1 links are conditioned; the hop-2 grants (folder#admin, group#member) are not.
@@ -1157,7 +1157,7 @@ func weightTwoCondLeftCases(t *testing.T) []plannerCase {
 		}
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// Both hop-1 conditions pass and both hop-2 grants exist → intersection granted.
 			name:           "both_left_conditions_pass_grants",
@@ -1196,7 +1196,7 @@ func weightTwoCondLeftCases(t *testing.T) []plannerCase {
 }
 
 // weightTwoCondRightCases returns the shared case table for the RIGHT-side conditioned model.
-func weightTwoCondRightCases(t *testing.T) []plannerCase {
+func weightTwoCondRightCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// Unconditioned hop-1 links; the hop-2 grants carry the conditions.
@@ -1207,7 +1207,7 @@ func weightTwoCondRightCases(t *testing.T) []plannerCase {
 		return tuple.NewTupleKey("document:"+objectID, "from_members", "group:g1#member")
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// TTU side: folder#admin condition passes → union granted via the folder hop.
 			name:       "ttu_right_condition_passes_grants",
@@ -1256,7 +1256,7 @@ func weightTwoCondRightCases(t *testing.T) []plannerCase {
 }
 
 // weightTwoCondBothCases returns the shared case table for the BOTH-sides conditioned model.
-func weightTwoCondBothCases(t *testing.T) []plannerCase {
+func weightTwoCondBothCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// Every hop-1 link and hop-2 grant is conditioned.
@@ -1269,7 +1269,7 @@ func weightTwoCondBothCases(t *testing.T) []plannerCase {
 		}
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// All four conditions pass → intersection granted.
 			name:       "all_conditions_pass_grants",
@@ -1313,7 +1313,7 @@ func weightTwoCondBothCases(t *testing.T) []plannerCase {
 }
 
 // complexWeightTwoMixedCases returns the shared case table for the combined mixed fixture.
-func complexWeightTwoMixedCases(t *testing.T) []plannerCase {
+func complexWeightTwoMixedCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// Fixed links: parent (conditioned TTU), org (unconditioned TTU), members (conditioned
@@ -1334,7 +1334,7 @@ func complexWeightTwoMixedCases(t *testing.T) []plannerCase {
 		"p_parent": 1, "p_admin": 1, "p_members": "active", "p_member": "active",
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		{
 			// from_folder (admin AND editor on f1, conditions pass), from_org (owner on o1),
 			// from_members (member on g1, conditions pass), not blocked → granted.
@@ -1472,7 +1472,7 @@ func complexWeightTwoMixedCases(t *testing.T) []plannerCase {
 // ([user] OR editor), the weight-2 TTU self-join (owner from parent), and a merged INTERSECT
 // region (blocked AND old) — folded in process as positive=(union AND ttu),
 // result=positive AND NOT negative.
-func mergedExclusionCases(t *testing.T) []plannerCase {
+func mergedExclusionCases(t *testing.T) []engineCase {
 	t.Helper()
 
 	// parentLink ties document:1 to folder:f1; ownerGrant makes alice owner of that folder, so
@@ -1487,8 +1487,8 @@ func mergedExclusionCases(t *testing.T) []plannerCase {
 	tk := func(keys ...*openfgav1.TupleKey) []*openfgav1.TupleKey {
 		return append([]*openfgav1.TupleKey{}, keys...)
 	}
-	mk := func(name string, expected bool, keys ...*openfgav1.TupleKey) plannerCase {
-		return plannerCase{
+	mk := func(name string, expected bool, keys ...*openfgav1.TupleKey) engineCase {
+		return engineCase{
 			name:       name,
 			model:      mergedExclusionModel,
 			objectType: "document",
@@ -1499,7 +1499,7 @@ func mergedExclusionCases(t *testing.T) []plannerCase {
 		}
 	}
 
-	return []plannerCase{
+	return []engineCase{
 		// positive never holds without the TTU owner hop, regardless of the union.
 		mk("nothing_denies", false),
 		mk("union_direct_without_owner_denies", false, direct),
@@ -1527,9 +1527,9 @@ func mergedExclusionCases(t *testing.T) []plannerCase {
 }
 
 // cycleCase is one end-to-end scenario whose model contains a relationship cycle. The cycle makes
-// the resolution path recursive (infinite weight), which this iteration of the planner does not yet
+// the resolution path recursive (infinite weight), which this iteration of the engine does not yet
 // support, so planning must decline with ErrUnsupportedWeight rather than loop, panic, or emit SQL.
-// The tuples are seeded into a real datastore first so the case proves the planner declines on the
+// The tuples are seeded into a real datastore first so the case proves the engine declines on the
 // model's shape — not merely because no data exercises the cycle — and that the cycle-materializing
 // rows in the store never trip up planning.
 type cycleCase struct {
@@ -1560,14 +1560,14 @@ const cycleModel = `
 			define parent: [org, team]
 			define viewer: member from parent`
 
-// cycleCases drives models with relationship cycles through the planner with cycle-exercising tuples
+// cycleCases drives models with relationship cycles through the engine with cycle-exercising tuples
 // seeded in the store. Each case must decline with ErrUnsupportedWeight.
 func cycleCases() []cycleCase {
 	return []cycleCase{
 		{
 			// document:1 parent org:o1; org:o1 members include team:t1#member, whose members include
 			// org:o1#member — a fully materialized org↔team membership cycle, with alice reachable
-			// one hop into it. The planner must still decline on the recursive model shape.
+			// one hop into it. The engine must still decline on the recursive model shape.
 			name:       "ttu_into_mutual_userset_cycle",
 			model:      cycleModel,
 			objectType: "document",
@@ -1583,7 +1583,7 @@ func cycleCases() []cycleCase {
 		{
 			// The same model reached through the team parent, with the cycle closed the other way
 			// (team:t1 admits org:o1#member, org:o1 admits team:t1#member). alice is never granted,
-			// but the recursive shape — not the data — is what makes the planner decline.
+			// but the recursive shape — not the data — is what makes the engine decline.
 			name:       "ttu_into_cycle_no_grant",
 			model:      cycleModel,
 			objectType: "document",
@@ -1641,7 +1641,7 @@ func cycleCases() []cycleCase {
 	}
 }
 
-// runCycleCases seeds each cycle case's tuples into the given datastore (proving the planner declines
+// runCycleCases seeds each cycle case's tuples into the given datastore (proving the engine declines
 // on the recursive model shape, not for lack of data) and asserts that planning returns
 // ErrUnsupportedWeight. It is engine-agnostic: the writer and builder come from the caller's env, so
 // Postgres, MySQL, and SQLite all exercise the identical scenarios.

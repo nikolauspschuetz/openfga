@@ -1,4 +1,4 @@
-package planner
+package engine
 
 import (
 	"context"
@@ -12,15 +12,15 @@ import (
 	"github.com/openfga/openfga/pkg/typesystem"
 )
 
-// These tests pin the exact SQL text and bind arguments the planner emits for each query
+// These tests pin the exact SQL text and bind arguments the engine emits for each query
 // shape. They drive a real adapter.Builder (adaptertest.New) backed by a Recorder, which
 // captures the rendered statement and ordinal args when Plan.Execute runs the query — the
-// same path a live datastore would take, minus the database. This is the planner's
+// same path a live datastore would take, minus the database. This is the engine's
 // contract with the storage layer: a regression in how a plan compiles to SQL surfaces
 // here as a string diff rather than as a wrong authorization decision in production.
 
 // recordSQL plans a Check of objectType#viewer over the model and executes it through a
-// Recorder-backed builder, returning the SQL and bind args the planner handed the
+// Recorder-backed builder, returning the SQL and bind args the engine handed the
 // executor. The condition evaluator always denies; it only matters that one is supplied so
 // a gather plan can run.
 func recordSQL(t *testing.T, model, objectType, user string) (string, []any) {
@@ -41,7 +41,7 @@ func recordSQL(t *testing.T, model, objectType, user string) (string, []any) {
 
 // The subject is stored packed as "type:id[#relation]" in the _user column, so the
 // standard dialect decodes each logical field with ANSI string functions. These vars
-// reproduce those decoded expressions for the table alias "t" the planner always uses, so
+// reproduce those decoded expressions for the table alias "t" the engine always uses, so
 // the golden SQL below stays readable; the decoding itself is pinned literally in the ansi
 // package's render tests.
 var (
@@ -66,7 +66,7 @@ func sharedWhere() string {
 
 // relFilter is the relation-pruning predicate the HAVING query adds to the shared WHERE:
 // "t.relation = ?" for a single referenced relation, or "t.relation IN (?, ...)" for
-// several. Its bind args are the relations, which the planner emits sorted.
+// several. Its bind args are the relations, which the engine emits sorted.
 func relFilter(n int) string {
 	if n == 1 {
 		return "t.relation = ?"
@@ -282,7 +282,7 @@ func TestPlanSQL_NestedSetOperationsWithConditionsGather(t *testing.T) {
 	//	privileged = editor and approver           (intersection)
 	//	viewer     = privileged but not blocked    (exclusion; blocked = direct_e)
 	//
-	// Because the tree mentions conditions, it cannot fold in HAVING: the planner compiles
+	// Because the tree mentions conditions, it cannot fold in HAVING: the engine compiles
 	// it to one gather scan that pulls the candidate tuples for every leaf (a disjunct per
 	// leaf, in pre-order), leaving the set algebra and CEL to the executor. The two
 	// conditioned leaves match their named condition; the three plain ones match
@@ -351,7 +351,7 @@ func recordLeafSQL(t *testing.T, model, objectType, user string, i int) (string,
 	return rec.SQL, rec.Parameters
 }
 
-// t1/t2 are the decoded subject expressions for the self-join aliases the planner uses, the
+// t1/t2 are the decoded subject expressions for the self-join aliases the engine uses, the
 // two-alias analogues of the single-alias subjType/subjID/subjRel vars above.
 func decodedSubjType(alias string) string {
 	return "SUBSTRING(" + alias + "._user FROM 1 FOR POSITION(':' IN " + alias + "._user) - 1)"

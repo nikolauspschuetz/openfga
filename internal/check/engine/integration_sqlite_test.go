@@ -1,5 +1,5 @@
 // These integration tests are the SQLite analogue of integration_pg_test.go / integration_mysql_test.go:
-// they drive the planner end to end against a real SQLite database, proving the SQL the planner emits
+// they drive the engine end to end against a real SQLite database, proving the SQL the engine emits
 // through the production SQLite adapter (pkg/storage/adapter/sqlite) returns correct authorization
 // decisions when SQLite actually runs it.
 //
@@ -11,10 +11,10 @@
 //
 // A ":memory:" database is scoped to its single owning connection, so the migrations, the datastore
 // that seeds tuples, and the adapter that queries them all share ONE *sql.DB pinned to a single
-// connection (adapter/sqlite.Open sets MaxOpenConns(1)). The planner runs its leaf queries
+// connection (adapter/sqlite.Open sets MaxOpenConns(1)). The engine runs its leaf queries
 // concurrently, but each goroutine holds the one connection only for the span of a single
 // Execute→scan→Close, so they serialize on it rather than deadlock.
-package planner
+package engine
 
 import (
 	"context"
@@ -35,7 +35,7 @@ import (
 )
 
 // sqliteEnv is the shared SQLite backing for the suite: a datastore used to seed tuples and the
-// sqlite adapter the planner emits queries against. Both wrap the SAME in-memory *sql.DB, because a
+// sqlite adapter the engine emits queries against. Both wrap the SAME in-memory *sql.DB, because a
 // ":memory:" database is private to its connection — a second handle (or a second pooled connection)
 // would see an empty, separate database.
 type sqliteEnv struct {
@@ -72,9 +72,9 @@ func setupSqliteEnv(t *testing.T) *sqliteEnv {
 }
 
 // run plans and executes the case against SQLite under a fresh store id (so cases sharing the
-// in-memory database never collide) and returns the planner's decision. It mirrors pgEnv.run and
+// in-memory database never collide) and returns the engine's decision. It mirrors pgEnv.run and
 // mysqlEnv.run, differing only in the backing datastore and adapter.
-func (e *sqliteEnv) run(t *testing.T, tc plannerCase) bool {
+func (e *sqliteEnv) run(t *testing.T, tc engineCase) bool {
 	t.Helper()
 	ctx := context.Background()
 	store := ulid.Make().String()
@@ -99,7 +99,7 @@ func (e *sqliteEnv) run(t *testing.T, tc plannerCase) bool {
 
 // runCases walks a shared case table against the SQLite env. Each case gets a fresh env (and thus a
 // fresh in-memory database) so the cases are fully isolated.
-func (e *sqliteEnv) runCases(t *testing.T, cases []plannerCase) {
+func (e *sqliteEnv) runCases(t *testing.T, cases []engineCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,86 +108,86 @@ func (e *sqliteEnv) runCases(t *testing.T, cases []plannerCase) {
 	}
 }
 
-// TestPlannerIntegrationSQLite_ConditionFree covers the HAVING path, where SQLite folds the whole set
+// TestEngineIntegrationSQLite_ConditionFree covers the HAVING path, where SQLite folds the whole set
 // algebra and a returned row means granted.
-func TestPlannerIntegrationSQLite_ConditionFree(t *testing.T) {
+func TestEngineIntegrationSQLite_ConditionFree(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, conditionFreeCases(t))
 }
 
-// TestPlannerIntegrationSQLite_NestedConditionFree drives the complex nested tree end to end, the
+// TestEngineIntegrationSQLite_NestedConditionFree drives the complex nested tree end to end, the
 // integration analogue of TestPlanSQL_NestedSetOperationsHaving.
-func TestPlannerIntegrationSQLite_NestedConditionFree(t *testing.T) {
+func TestEngineIntegrationSQLite_NestedConditionFree(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, nestedConditionFreeCases(t))
 }
 
-// TestPlannerIntegrationSQLite_NestedConditioned drives the conditioned nested tree through the
+// TestEngineIntegrationSQLite_NestedConditioned drives the conditioned nested tree through the
 // gather path, the integration analogue of TestPlanSQL_NestedSetOperationsWithConditionsGather.
-func TestPlannerIntegrationSQLite_NestedConditioned(t *testing.T) {
+func TestEngineIntegrationSQLite_NestedConditioned(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, nestedConditionedCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwo drives weight-2 resolution paths — a single
+// TestEngineIntegrationSQLite_WeightTwo drives weight-2 resolution paths — a single
 // tuple-to-userset or userset hop — end to end against SQLite.
-func TestPlannerIntegrationSQLite_WeightTwo(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwo(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, weightTwoCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwoComplexBothLevels drives set operations across three weight-2
+// TestEngineIntegrationSQLite_WeightTwoComplexBothLevels drives set operations across three weight-2
 // hops with a hop-2 intersection inside from_folder, run end to end against SQLite.
-func TestPlannerIntegrationSQLite_WeightTwoComplexBothLevels(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwoComplexBothLevels(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, weightTwoComplexBothLevelsCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwoCondLeft drives the LEFT-side conditioned model against
+// TestEngineIntegrationSQLite_WeightTwoCondLeft drives the LEFT-side conditioned model against
 // SQLite: each hop-1 edge carries a condition, the hop-2 relations do not.
-func TestPlannerIntegrationSQLite_WeightTwoCondLeft(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwoCondLeft(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, weightTwoCondLeftCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwoCondRight drives the RIGHT-side conditioned model against
+// TestEngineIntegrationSQLite_WeightTwoCondRight drives the RIGHT-side conditioned model against
 // SQLite: the hop-2 relations carry conditions, the hop-1 edges do not.
-func TestPlannerIntegrationSQLite_WeightTwoCondRight(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwoCondRight(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, weightTwoCondRightCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwoCondBoth drives the BOTH-sides conditioned model against
+// TestEngineIntegrationSQLite_WeightTwoCondBoth drives the BOTH-sides conditioned model against
 // SQLite: every traversal carries a condition on its hop-1 edge and its hop-2 relation.
-func TestPlannerIntegrationSQLite_WeightTwoCondBoth(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwoCondBoth(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, weightTwoCondBothCases(t))
 }
 
-// TestPlannerIntegrationSQLite_WeightTwoComplexMixed drives the combined mixed fixture against SQLite:
+// TestEngineIntegrationSQLite_WeightTwoComplexMixed drives the combined mixed fixture against SQLite:
 // TTU and userset hops across union/intersection/exclusion with conditions on left, right, and both.
-func TestPlannerIntegrationSQLite_WeightTwoComplexMixed(t *testing.T) {
+func TestEngineIntegrationSQLite_WeightTwoComplexMixed(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, complexWeightTwoMixedCases(t))
 }
 
-// TestPlannerIntegrationSQLite_MergedExclusion drives the merged-region exclusion model end to end
+// TestEngineIntegrationSQLite_MergedExclusion drives the merged-region exclusion model end to end
 // against SQLite, proving the three compiled units fold to the correct decision across the model's
 // truth table.
-func TestPlannerIntegrationSQLite_MergedExclusion(t *testing.T) {
+func TestEngineIntegrationSQLite_MergedExclusion(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, mergedExclusionCases(t))
 }
 
-// TestPlannerIntegrationSQLite_Conditioned covers the gather path: the plan mentions an ABAC
-// condition, so SQLite only scans candidate tuples and the planner folds the set algebra in process
+// TestEngineIntegrationSQLite_Conditioned covers the gather path: the plan mentions an ABAC
+// condition, so SQLite only scans candidate tuples and the engine folds the set algebra in process
 // after evaluating CEL.
-func TestPlannerIntegrationSQLite_Conditioned(t *testing.T) {
+func TestEngineIntegrationSQLite_Conditioned(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, conditionedCases(t))
 }
 
-// TestPlannerIntegrationSQLite_StaleConditionOnConditionFreeRelation is the SQLite analogue of the
+// TestEngineIntegrationSQLite_StaleConditionOnConditionFreeRelation is the SQLite analogue of the
 // Postgres/MySQL test of the same name: a stale conditioned tuple on a plain `[user]` relation must
 // not satisfy the condition-free (HAVING) plan, because the count atom matches only unconditioned
 // tuples.
-func TestPlannerIntegrationSQLite_StaleConditionOnConditionFreeRelation(t *testing.T) {
+func TestEngineIntegrationSQLite_StaleConditionOnConditionFreeRelation(t *testing.T) {
 	setupSqliteEnv(t).runCases(t, staleConditionCases(t))
 }
 
-// TestPlannerIntegrationSQLite_Cycle drives models with relationship cycles end to end against SQLite:
+// TestEngineIntegrationSQLite_Cycle drives models with relationship cycles end to end against SQLite:
 // the cycle-materializing tuples are seeded into the store, then planning must decline with
 // ErrUnsupportedWeight because the recursive (infinite-weight) path is not yet supported.
-func TestPlannerIntegrationSQLite_Cycle(t *testing.T) {
+func TestEngineIntegrationSQLite_Cycle(t *testing.T) {
 	e := setupSqliteEnv(t)
 	runCycleCases(t, e.ds, e.builder, cycleCases())
 }

@@ -5,7 +5,7 @@
 // canned rows.
 //
 // It lives under pkg/storage/adapter so it may import the internal ansi package, while
-// remaining importable by any consumer's tests (e.g. internal/check/planner).
+// remaining importable by any consumer's tests (e.g. internal/check/engine).
 package adaptertest
 
 import (
